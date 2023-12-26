@@ -15,9 +15,38 @@
 (def echo {:name :echo
            :enter #(assoc % :response (ok (:request %)))})
 
+(defonce database (atom {}))
+
+(def db-interceptor
+  {:name :db-interceptor
+   :enter #(update % :request assoc :database @database)
+ 	 :leave (fn [ctx]
+            (if-let [[operation & args] (:tx-data ctx)]
+              (do
+                (apply swap! database operation args)
+                (assoc-in ctx [:request :database] @database))
+              ctx))})
+
+(defn make-list [nm] {:name nm :items {}})
+
+(defn make-list-item [nm] {:name nm :done? false})
+
+(def list-create-interceptor
+  {:name :list-create
+  	:enter (fn [ctx]
+            (let [nm (get-in ctx [:request :query-params :name] "Unnamed List")
+                  new-list (make-list nm)
+                  db-id (str (gensym "1"))
+                  url (route/url-for :list-view :params {:list-id db-id})]
+              (assoc ctx
+                     :response (created new-list "Location" url)
+                     :tx-data [assoc db-id new-list])))})
+
+
+
 (def routes
   (route/expand-routes
-    #{["/todo" :post echo :route-name :list-create]
+    #{["/todo" :post [db-interceptor list-create-interceptor]]
       ["/todo" :get echo :route-name :list-query-form]
       ["/todo/:list-id" :get echo :route-name :list-view]
       ["/todo/:list-id" :post echo :route-name :list-item-create]
@@ -49,7 +78,11 @@
   (stop-dev)
  	(start-dev))
 
-(comment
+(defn test-request [verb url]
+  (test/response-for (::http/service-fn @server) verb url))
 
+(comment
+   @database
   (restart)
- 	)
+  (test-request :post "/todo?name=B-List")
+  )
